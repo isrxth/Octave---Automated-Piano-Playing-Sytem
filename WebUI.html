@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Team Obsidian - Robotic Piano UI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <style>
+        /* Custom Piano CSS */
+        #piano-container {
+            position: relative;
+            display: flex;
+            height: 140px;
+            background: #111;
+            padding: 10px;
+            border-radius: 8px;
+            overflow-x: auto;
+            white-space: nowrap;
+        }
+        .key-white {
+            width: 36px;
+            height: 120px;
+            background: white;
+            border: 1px solid #333;
+            border-radius: 0 0 4px 4px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .key-white:active, .key-white.active { background: #ddd; }
+        .key-black {
+            width: 20px;
+            height: 75px;
+            background: black;
+            position: absolute;
+            z-index: 10;
+            cursor: pointer;
+            border-radius: 0 0 4px 4px;
+            transform: translateX(-50%);
+        }
+        .key-black:active, .key-black.active { background: #444; }
+    </style>
+
+    <script>
+        window.loadedSongBPM = 120; 
+
+        window.MidiParser = {
+            parse: function (arrayBuffer) {
+                const data = new DataView(arrayBuffer);
+                let offset = 0;
+                function readStr(len) {
+                    let str = "";
+                    for (let i = 0; i < len; i++) str += String.fromCharCode(data.getUint8(offset++));
+                    return str;
+                }
+                if (readStr(4) !== "MThd") throw new Error("Malformed header");
+                offset += 4; const format = data.getUint16(offset); offset += 2;
+                const tracksCount = data.getUint16(offset); offset += 2;
+                const timeDivision = data.getUint16(offset); offset += 2;
+                const result = { timeDivision, track: [] };
+                
+                for (let i = 0; i < tracksCount; i++) {
+                    if (readStr(4) !== "MTrk") throw new Error("Malformed track");
+                    const trackLength = data.getUint32(offset); offset += 4;
+                    const endOfTrack = offset + trackLength;
+                    const trackEvents = [];
+                    let runningStatus = null;
+                    
+                    while (offset < endOfTrack) {
+                        let deltaTime = 0, byte = 0;
+                        do { byte = data.getUint8(offset++); deltaTime = (deltaTime << 7) | (byte & 0x7F); } while (byte & 0x80);
+                        let status = data.getUint8(offset);
+                        if (status < 0x80) { status = runningStatus; } else { offset++; if (status < 0xF0) runningStatus = status; }
+                        const event = { deltaTime, type: status >> 4, data: [] };
+                        
+                        if (status === 0xFF || status === 0xF0 || status === 0xF7) {
+                            if (status === 0xFF) event.metaType = data.getUint8(offset++);
+                            let len = 0, b = 0;
+                            do { b = data.getUint8(offset++); len = (len << 7) | (b & 0x7F); } while (b & 0x80);
+                            for (let j = 0; j < len; j++) event.data.push(data.getUint8(offset++));
+                        } else {
+                            const msgType = status & 0xF0;
+                            event.data.push(data.getUint8(offset++));
+                            if (msgType !== 0xC0 && msgType !== 0xD0) event.data.push(data.getUint8(offset++));
+                        }
+                        trackEvents.push(event);
+                    }
+                    result.track.push(trackEvents);
+                }
+                return result;
+            }
+        };
+    </script>
+</head>
+<body class="bg-gray-900 text-gray-200 font-mono p-6 max-w-5xl mx-auto h-screen flex flex-col">
+    
+    <div class="mb-4 border-b border-gray-700 pb-4">
+        <h1 class="text-2xl font-bold text-white mb-2">ROBO-SYS // MASTER CONTROL UI</h1>
+        <div class="flex gap-4 items-center">
+            <input type="text" id="ip-input" placeholder="10.132.234.96" class="bg-gray-800 border border-gray-600 px-3 py-1 rounded text-white" value="10.132.234.96">
+            <button id="btn-connect" class="bg-blue-600 hover:bg-blue-500 px-4 py-1 rounded font-bold transition">CONNECT WS</button>
+            <span id="status-text" class="text-red-400 font-bold">OFFLINE</span>
+        </div>
+    </div>
+
+    <div class="bg-gray-800 p-3 rounded border border-gray-700 mb-4 flex flex-col gap-3 text-xs">
+        <div class="flex gap-4 flex-wrap items-center">
+            <span class="text-gray-400 font-bold">KINEMATICS:</span>
+            <label>Travel Timeout Override (ms): <input type="number" id="cfg-travel" value="1500" class="w-16 bg-black text-white px-1 border border-gray-600"></label>
+            <label>Steps/Octave: <input type="number" id="cfg-steps" value="800" class="w-16 bg-black text-white px-1 border border-gray-600"></label>
+            <label>White Home: <input type="number" id="cfg-white" value="810" class="w-16 bg-black text-white px-1 border border-gray-600"></label>
+            <label>Black Home (C3): <input type="number" id="cfg-black" value="2400" class="w-16 bg-black text-white px-1 border border-gray-600"></label>
+            <label class="text-yellow-400 font-bold">Strike Power: <input type="number" id="cfg-power" value="255" min="50" max="255" class="w-16 bg-black text-white px-1 border border-gray-600"></label>
+            <label class="text-blue-400 font-bold">Speed: <input type="number" id="cfg-speed" value="3500" class="w-16 bg-black text-white px-1 border border-gray-600"></label>
+            <label class="text-blue-400 font-bold">Accel: <input type="number" id="cfg-accel" value="3000" class="w-16 bg-black text-white px-1 border border-gray-600"></label>
+        </div>
+        <div class="flex gap-4 flex-wrap items-center pt-2 border-t border-gray-700">
+            <label class="text-purple-400 font-bold">Clearance (ms): <input type="number" id="cfg-clearance" value="180" class="w-16 bg-black text-white px-1 border border-gray-600"></label>
+            <label class="text-purple-400 font-bold">Short Clearance (ms): <input type="number" id="cfg-short-clear" value="120" class="w-16 bg-black text-white px-1 border border-gray-600"></label>
+            <label class="text-purple-400 font-bold">Small Move &lt; (Steps): <input type="number" id="cfg-small-thresh" value="100" class="w-16 bg-black text-white px-1 border border-gray-600"></label>
+            
+            <div class="ml-auto flex items-center gap-2">
+                <label class="text-pink-400 font-bold border border-pink-400 p-1 rounded bg-black cursor-pointer hover:bg-gray-700 transition">
+                    <input type="checkbox" id="cfg-autozero" checked class="mr-1">Auto-Zero on Finish
+                </label>
+                <button id="btn-force-zero" class="bg-pink-600 hover:bg-pink-500 text-white font-bold px-3 py-1 rounded transition">FORCE ZERO</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="mb-4">
+        <div class="flex justify-between items-center mb-2">
+            <h2 class="text-sm text-gray-400">INTERACTIVE KEYBOARD</h2>
+            <select id="kbd-mode" class="bg-gray-800 border border-gray-600 px-3 py-1 rounded text-white text-sm">
+                <option value="octave">Octave Mode (12 Keys)</option>
+                <option value="full">61-Key Mode (C3 - C8)</option>
+            </select>
+        </div>
+        <div id="piano-container"></div>
+    </div>
+
+    <div class="grid grid-cols-2 gap-6 mb-4">
+        <div class="bg-gray-800 p-4 rounded border border-gray-700">
+            <h2 class="text-sm text-gray-400 mb-2">1. LOAD MIDI</h2>
+            <input type="file" id="file-input" accept=".mid,.midi" class="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-gray-700 file:text-white hover:file:bg-gray-600 cursor-pointer"/>
+            <p id="file-status" class="text-xs text-green-400 mt-2 hidden">File Loaded & Parsed.</p>
+        </div>
+
+        <div class="bg-gray-800 p-4 rounded border border-gray-700 flex flex-col justify-center">
+            <div class="flex justify-between items-center mb-2">
+                <h2 class="text-sm text-gray-400">2. PLAYBACK CONTROL</h2>
+                <label class="text-green-400 font-bold text-xs">Target BPM: <input type="number" id="cfg-bpm" value="120" class="w-16 bg-black text-white px-1 border border-gray-600 rounded"></label>
+            </div>
+            <div class="flex gap-4">
+                <button id="btn-play" class="bg-green-600 hover:bg-green-500 px-6 py-2 rounded font-bold transition w-full disabled:opacity-50" disabled>PLAY</button>
+                <button id="btn-stop" class="bg-red-600 hover:bg-red-500 px-6 py-2 rounded font-bold transition w-full disabled:opacity-50" disabled>STOP</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="flex-grow flex flex-col bg-black rounded border border-gray-700 overflow-hidden">
+        <div class="bg-gray-800 px-4 py-2 border-b border-gray-700 text-xs text-gray-400 flex justify-between">
+            <span>SERIAL LOGS</span>
+            <button id="btn-clear" class="hover:text-white">CLEAR</button>
+        </div>
+        <div id="serial-monitor" class="p-4 overflow-y-auto text-sm text-green-400 flex-grow font-mono whitespace-pre-wrap"></div>
+    </div>
+
+    <script>
+        // --- GLOBAL HARDWARE STATE TRACKING ---
+        let currentM1Pos = 810;
+        let currentM2Pos = 0;
+        let hardwareInTransit = false;
+
+        // --- CUSTOM HARDWARE MAPPING ---
+        const noteToSolenoidMap = [12, 1, 11, 2, 10, 9, 3, 8, 4, 7, 5, 6];
+
+        function getSolenoidId(midiNote) {
+            return noteToSolenoidMap[midiNote % 12];
+        }
+
+        const whiteSolenoidOffsets = {
+            12: 0, 11: 10, 10: 30, 9: 40, 8: 60, 7: 60, 6: 80 
+        };
+
+        // --- DYNAMIC NEAREST-NEIGHBOR ROUTING ENGINE ---
+        function calculateMove(midiNote) {
+            const STEPS_PER_OCTAVE = parseInt(document.getElementById('cfg-steps').value);
+            const WHITE_HOME_STEP = parseInt(document.getElementById('cfg-white').value);
+            const BLACK_HOME_STEP = parseInt(document.getElementById('cfg-black').value);
+
+            const noteIndexInOctave = midiNote % 12;
+            const isBlack = [1, 3, 6, 8, 10].includes(noteIndexInOctave);
+
+            if (isBlack) {
+                const octaveOffset = Math.floor((midiNote - 48) / 12);
+                
+                // INVERTED KINEMATICS FOR BLACK CARRIAGE
+                // Zero is on the Right (High Notes). Moving Left (Low Notes) increases steps.
+                // As the octave goes UP (moving Right), we must SUBTRACT steps to approach 0.
+                const targetStep = BLACK_HOME_STEP - (octaveOffset * STEPS_PER_OCTAVE);
+                
+                return { motor: "M2", targetStep: targetStep, solenoidId: getSolenoidId(midiNote) };
+            } else {
+                const stepsPerWhite = STEPS_PER_OCTAVE / 7;
+                const whiteOffsetMap = {0:0, 2:1, 4:2, 5:3, 7:4, 9:5, 11:6};
+                const octave = Math.floor((midiNote - 48) / 12);
+                const targetAbsWhiteIndex = (octave * 7) + whiteOffsetMap[noteIndexInOctave];
+
+                let bestStep = null;
+                let bestSolenoid = null;
+                let minDistance = Infinity;
+                const whiteSolenoids = [12, 11, 10, 9, 8, 7, 6];
+
+                for (let i = 0; i < 7; i++) {
+                    const carriageBaseAbs = targetAbsWhiteIndex - i; 
+                    const solId = whiteSolenoids[i];
+                    const microAdj = whiteSolenoidOffsets[solId] || 0;
+
+                    const candidateStep = WHITE_HOME_STEP + (carriageBaseAbs * stepsPerWhite) - microAdj;
+                    const distance = Math.abs(candidateStep - currentM1Pos);
+
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        bestStep = Math.round(candidateStep);
+                        bestSolenoid = solId;
+                    }
+                }
+
+                return { motor: "M1", targetStep: bestStep, solenoidId: bestSolenoid, distSaved: Math.round(minDistance) };
+            }
+        }
+
+        let wsClient = null;
+        let isPlaying = false;
+        let playbackQueue = [];
+        let currentQueueIndex = 0;
+        let movementResolver = null;
+        let fallbackTimeoutId = null;
+
+        const monitor = document.getElementById('serial-monitor');
+        const statusText = document.getElementById('status-text');
+        
+        function log(msg, isSystem = false) {
+            const div = document.createElement('div');
+            div.textContent = `> ${msg}`;
+            if(isSystem) div.className = "text-yellow-400";
+            monitor.appendChild(div);
+            monitor.scrollTop = monitor.scrollHeight;
+            if(monitor.children.length > 200) monitor.removeChild(monitor.firstChild);
+        }
+
+        document.getElementById('btn-clear').onclick = () => monitor.innerHTML = '';
+
+        // --- DYNAMIC SPEED & ACCEL LISTENERS ---
+        document.getElementById('cfg-speed').addEventListener('change', (e) => {
+            if(wsClient && wsClient.readyState === WebSocket.OPEN) wsClient.send(`CFG,SPD,${e.target.value}`);
+        });
+
+        document.getElementById('cfg-accel').addEventListener('change', (e) => {
+            if(wsClient && wsClient.readyState === WebSocket.OPEN) wsClient.send(`CFG,ACC,${e.target.value}`);
+        });
+
+        // --- WEBSOCKET CONNECTION ---
+        document.getElementById('btn-connect').onclick = () => {
+            const ip = document.getElementById('ip-input').value.trim();
+            if(!ip) return alert("Enter IP address");
+            if(wsClient) wsClient.close();
+            
+            log(`Connecting to ws://${ip}/ws...`, true);
+            statusText.textContent = "CONNECTING...";
+            statusText.className = "text-yellow-400 font-bold";
+
+            wsClient = new WebSocket(`ws://${ip}/ws`);
+            wsClient.onopen = () => {
+                log("WebSocket Connected!", true);
+                statusText.textContent = "ONLINE";
+                statusText.className = "text-green-400 font-bold";
+                
+                currentM1Pos = parseInt(document.getElementById('cfg-white').value);
+                currentM2Pos = parseInt(document.getElementById('cfg-black').value); // Will now pull the high 2400 value
+            };
+            wsClient.onmessage = async (e) => {
+                let text = e.data;
+                if (text instanceof Blob) text = await text.text();
+                
+                text.split('\n').forEach(line => { 
+                    if(line.trim()) {
+                        log(line.trim());
+                        
+                        if (line.includes("AT_TARGET") || line.includes("ZERO_COMPLETE")) {
+                            hardwareInTransit = false; 
+                            if (movementResolver) {
+                                clearTimeout(fallbackTimeoutId);
+                                const resolveTemp = movementResolver;
+                                movementResolver = null;
+                                resolveTemp(); 
+                            }
+                        }
+                    } 
+                });
+            };
+            wsClient.onclose = () => {
+                log("WebSocket Disconnected.", true);
+                statusText.textContent = "OFFLINE";
+                statusText.className = "text-red-400 font-bold";
+                stopPlayback();
+            };
+        };
+
+        // --- MANUAL FORCE ZERO BUTTON LOGIC ---
+        document.getElementById('btn-force-zero').onclick = () => {
+            if(wsClient && wsClient.readyState === WebSocket.OPEN) {
+                log("--- MANUAL QUICK-ZERO TRIGGERED ---", true);
+                wsClient.send("CMD,ZERO");
+                hardwareInTransit = true;
+                // Physical zero syncs with the logical zero
+                currentM1Pos = 0;
+                currentM2Pos = 0;
+            } else {
+                alert("Please connect to the WebSocket first.");
+            }
+        };
+
+        // --- MANUAL PLAY ROUTING ---
+        async function playRoboticNote(midiNote) {
+            if (!wsClient || wsClient.readyState !== WebSocket.OPEN) return;
+
+            const STRIKE_POWER = parseInt(document.getElementById('cfg-power').value);
+            const route = calculateMove(midiNote);
+
+            if ((route.motor === "M1" && currentM1Pos !== route.targetStep) || 
+                (route.motor === "M2" && currentM2Pos !== route.targetStep)) {
+                
+                hardwareInTransit = true;
+                wsClient.send(`MOVE,${route.motor},${route.targetStep}`);
+                
+                if (route.motor === "M1") currentM1Pos = route.targetStep;
+                if (route.motor === "M2") currentM2Pos = route.targetStep;
+            }
+
+            if (hardwareInTransit) {
+                await new Promise((resolve) => { movementResolver = resolve; });
+            }
+
+            if (wsClient && wsClient.readyState === WebSocket.OPEN) {
+                wsClient.send(`HIT,${route.solenoidId},${STRIKE_POWER}`);
+            }
+        }
+
+        // --- PIANO UI GENERATION ---
+        function createKeyboard() {
+            const container = document.getElementById('piano-container');
+            container.innerHTML = ''; 
+            
+            const mode = document.getElementById('kbd-mode').value;
+            const startNote = mode === 'octave' ? 60 : 48; 
+            const endNote = mode === 'octave' ? 71 : 108;  
+            
+            let currentWhiteX = 0;
+            const whiteKeyWidth = 36;
+
+            for (let note = startNote; note <= endNote; note++) {
+                const noteIndex = note % 12;
+                const isBlack = [1, 3, 6, 8, 10].includes(noteIndex);
+                
+                const key = document.createElement('div');
+                key.dataset.note = note;
+                
+                if (isBlack) {
+                    key.className = 'key-black';
+                    key.style.left = `${currentWhiteX}px`;
+                } else {
+                    key.className = 'key-white';
+                    currentWhiteX += whiteKeyWidth;
+                }
+
+                key.onmousedown = () => {
+                    key.classList.add('active');
+                    playRoboticNote(note);
+                };
+                key.onmouseup = () => key.classList.remove('active');
+                key.onmouseleave = () => key.classList.remove('active');
+
+                container.appendChild(key);
+            }
+        }
+        
+        document.getElementById('kbd-mode').addEventListener('change', createKeyboard);
+        createKeyboard(); 
+
+        // --- MIDI FILE PLAYBACK PARSER WITH AUTO-BPM DETECTION ---
+        document.getElementById('file-input').onchange = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                try {
+                    const midi = window.MidiParser.parse(ev.target.result);
+                    processMidiToQueue(midi);
+                    document.getElementById('file-status').classList.remove('hidden');
+                    document.getElementById('btn-play').disabled = false;
+                    document.getElementById('btn-stop').disabled = false;
+                    log(`MIDI Loaded: ${file.name} | Detected Original BPM: ${window.loadedSongBPM}`, true);
+                } catch(err) { log(`Parse Error: ${err.message}`, true); }
+            };
+            reader.readAsArrayBuffer(file);
+        };
+
+        function processMidiToQueue(midiObj) {
+            playbackQueue = [];
+            const ticksPerBeat = midiObj.timeDivision;
+            let tempo = 500000;
+            let parsedBPM = 120; 
+
+            midiObj.track.forEach(track => {
+                let absoluteTick = 0;
+                track.forEach(ev => {
+                    absoluteTick += ev.deltaTime;
+                    if (ev.type === 255 && ev.metaType === 81) {
+                        tempo = (ev.data[0] << 16) | (ev.data[1] << 8) | ev.data[2];
+                        parsedBPM = Math.round(60000000 / tempo);
+                    }
+                    if (ev.type === 9 && ev.data[1] > 0) { 
+                        const timeMs = absoluteTick * (tempo / (ticksPerBeat * 1000));
+                        playbackQueue.push({ time: timeMs, note: ev.data[0] });
+                    }
+                });
+            });
+
+            window.loadedSongBPM = parsedBPM;
+            document.getElementById('cfg-bpm').value = parsedBPM;
+            playbackQueue.sort((a, b) => a.time - b.time);
+        }
+
+        // --- SAFELY SYNCHRONIZED LOOKAHEAD ENGINE WITH DYNAMIC LIVE TEMPO ---
+        async function startPlayback() {
+            if (playbackQueue.length === 0 || isPlaying) return;
+            if (!wsClient || wsClient.readyState !== WebSocket.OPEN) return alert("Connect WS first!");
+
+            isPlaying = true;
+            currentQueueIndex = 0;
+            hardwareInTransit = false;
+            log("--- LIVE-TEMPO LOOKAHEAD PLAYBACK ENGINE STARTED ---", true);
+
+            const STRIKE_POWER = parseInt(document.getElementById('cfg-power').value);
+            const OVERRIDE_TIMEOUT = parseInt(document.getElementById('cfg-travel').value);
+
+            let lastNoteTime = 0;
+
+            // 1. Initial Force-Sync Move for Note 0 
+            let nextRoutePrecalculated = calculateMove(playbackQueue[0].note);
+            if ((nextRoutePrecalculated.motor === "M1" && currentM1Pos !== nextRoutePrecalculated.targetStep) || 
+                (nextRoutePrecalculated.motor === "M2" && currentM2Pos !== nextRoutePrecalculated.targetStep)) {
+                
+                hardwareInTransit = true;
+                wsClient.send(`MOVE,${nextRoutePrecalculated.motor},${nextRoutePrecalculated.targetStep}`);
+            }
+
+            while (currentQueueIndex < playbackQueue.length && isPlaying) {
+                const event = playbackQueue[currentQueueIndex];
+                const route = nextRoutePrecalculated; 
+                
+                // 2. LIVE TEMPO MATH Evaluated directly on every loop iteration
+                const targetBPM = parseFloat(document.getElementById('cfg-bpm').value) || window.loadedSongBPM;
+                const speedRatio = window.loadedSongBPM / targetBPM;
+                
+                // 3. STRICT INTERLOCK: Block thread if carriage is currently driving
+                if (hardwareInTransit) {
+                    await new Promise((resolve) => {
+                        movementResolver = resolve;
+                        fallbackTimeoutId = setTimeout(() => {
+                            log("[WARN] Transit hit override timeout limit.", true);
+                            movementResolver = null;
+                            hardwareInTransit = false;
+                            resolve();
+                        }, OVERRIDE_TIMEOUT);
+                    });
+                }
+                
+                // Update tracker state to destination
+                if (route.motor === "M1") currentM1Pos = route.targetStep;
+                if (route.motor === "M2") currentM2Pos = route.targetStep;
+
+                // 4. SCALED MUSICAL CLOCK DELAY
+                if (currentQueueIndex > 0) {
+                    let baseGap = event.time - lastNoteTime;
+                    let realWorldNoteGap = baseGap * speedRatio;
+                    
+                    if (realWorldNoteGap > 0) {
+                        await new Promise(resolve => setTimeout(resolve, realWorldNoteGap));
+                    }
+                }
+                
+                if (!isPlaying) break;
+
+                // 5. SAFE STRIKE: Interlock guarantees carriage is static
+                wsClient.send(`HIT,${route.solenoidId},${STRIKE_POWER}`);
+
+                const uiKey = document.querySelector(`[data-note="${event.note}"]`);
+                if(uiKey) {
+                    uiKey.classList.add('active');
+                    setTimeout(() => uiKey.classList.remove('active'), 150);
+                }
+
+                // 6. LOOKAHEAD PREP & DYNAMIC CLEARANCE
+                let clearanceTime = parseInt(document.getElementById('cfg-clearance').value) || 180;
+                let dist = 0;
+
+                if (currentQueueIndex + 1 < playbackQueue.length) {
+                    const nextEvent = playbackQueue[currentQueueIndex + 1];
+                    nextRoutePrecalculated = calculateMove(nextEvent.note);
+                    
+                    if (nextRoutePrecalculated.motor === "M1") dist = Math.abs(nextRoutePrecalculated.targetStep - currentM1Pos);
+                    if (nextRoutePrecalculated.motor === "M2") dist = Math.abs(nextRoutePrecalculated.targetStep - currentM2Pos);
+
+                    const smallThresh = parseInt(document.getElementById('cfg-small-thresh').value) || 100;
+                    const shortClear = parseInt(document.getElementById('cfg-short-clear').value) || 120;
+
+                    if (dist < smallThresh) { clearanceTime = shortClear; }
+                }
+
+                // 7. MECHANICAL RETRACTION: Wait for the solenoid to lift OUT of the keys
+                await new Promise(resolve => setTimeout(resolve, clearanceTime));
+
+                if (!isPlaying) break;
+
+                // 8. BACKGROUND TRAVEL: Send the MOVE command ONLY after retraction
+                if (currentQueueIndex + 1 < playbackQueue.length && dist > 0) {
+                    hardwareInTransit = true;
+                    wsClient.send(`MOVE,${nextRoutePrecalculated.motor},${nextRoutePrecalculated.targetStep}`);
+                }
+
+                // 9. DELTA CORRECTION: Convert physical clearance back into "MIDI Time" 
+                let midiClearanceTime = clearanceTime / speedRatio;
+                lastNoteTime = event.time + midiClearanceTime;
+
+                currentQueueIndex++;
+            }
+
+            if (isPlaying && document.getElementById('cfg-autozero').checked) {
+                log("--- PLAYBACK FINISHED: TRIGGERING QUICK-ZERO SYNC ---", true);
+                hardwareInTransit = true;
+                wsClient.send("CMD,ZERO");
+                currentM1Pos = 0;
+                currentM2Pos = 0;
+            }
+
+            stopPlayback();
+        }
+
+        function stopPlayback() {
+            isPlaying = false;
+            hardwareInTransit = false;
+            if (movementResolver) {
+                const tempResolve = movementResolver;
+                movementResolver = null;
+                tempResolve();
+            }
+            clearTimeout(fallbackTimeoutId);
+            log("--- PLAYBACK STOPPED & RESET ---", true);
+            document.querySelectorAll('.active').forEach(el => el.classList.remove('active'));
+        }
+
+        document.getElementById('btn-play').onclick = startPlayback;
+        document.getElementById('btn-stop').onclick = stopPlayback;
+
+    </script>
+</body>
+</html>
