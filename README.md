@@ -238,6 +238,20 @@
 
 ###### 📝 License \& Credits
 
+## Schematics & PCB
+
+![Schematic and PCB overview](assets/Schmatics%20%26%20PCB/Screenshot%202026-06-05%20142526.png)
+
+![Schematic detail](assets/Schmatics%20%26%20PCB/Screenshot%202026-06-05%20142513.png)
+
+![PCB detail](assets/Schmatics%20%26%20PCB/Screenshot%202026-06-05%20142454.png)
+
+![Power board schematic](assets/Schmatics%20%26%20PCB/Screenshot%202026-06-05%20142444.png)
+
+![Solenoid board schematic](assets/Schmatics%20%26%20PCB/Screenshot%202026-06-05%20142410.png)
+
+![Stepper board schematic](assets/Schmatics%20%26%20PCB/Screenshot%202026-06-05%20142358.png)
+
 ###### 
 
 ###### Developed by Team WeBeSyncing.
