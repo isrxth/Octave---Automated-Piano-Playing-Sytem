@@ -8,6 +8,12 @@
 
 ###### Project Octave is a high-speed, polyphonic, CNC-style robotic piano playing system. Utilizing a multi-microcontroller architecture, ESP-NOW wireless synchronization, and a custom lookahead kinematic engine, Octave translates standard .mid files into precise physical movements, playing an acoustic piano with superhuman speed and accuracy.
 
+
+
+https://github.com/user-attachments/assets/f8b78fd2-65e9-428f-8b61-9593326f1c79
+
+
+
 ###### ✨ Key Features
 
 ###### 
